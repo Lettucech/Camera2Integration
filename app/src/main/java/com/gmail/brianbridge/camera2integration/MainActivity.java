@@ -10,8 +10,11 @@ public class MainActivity extends AppCompatActivity {
 		super.onCreate(savedInstanceState);
 		setContentView(R.layout.activity_main);
 
+		Camera2BaseFragment fragment = new Camera2BaseFragment();
+//		fragment.setDeniedLens(1,2,3,4);
+
 		getSupportFragmentManager().beginTransaction()
-				.replace(R.id.frameLayout_fragmentContainer, new CameraFragment())
+				.replace(R.id.frameLayout_fragmentContainer, fragment)
 				.commit();
 	}
 }

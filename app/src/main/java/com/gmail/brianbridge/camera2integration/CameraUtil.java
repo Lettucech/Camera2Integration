@@ -2,10 +2,18 @@ package com.gmail.brianbridge.camera2integration;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
+import android.media.Image;
+import android.net.Uri;
 import android.util.Log;
 import android.util.Size;
+import android.util.SparseIntArray;
 import android.view.Surface;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -15,6 +23,15 @@ public class CameraUtil {
 	public static final String TAG = CameraUtil.class.getSimpleName();
 	public static final int API2_MAX_PREVIEW_WIDTH = 1920;
 	public static final int API2_MAX_PREVIEW_HEIGHT = 1080;
+
+	private static final SparseIntArray ORIENTATIONS = new SparseIntArray();
+	static {
+		ORIENTATIONS.append(Surface.ROTATION_0, 90);
+		ORIENTATIONS.append(Surface.ROTATION_90, 0);
+		ORIENTATIONS.append(Surface.ROTATION_180, 270);
+		ORIENTATIONS.append(Surface.ROTATION_270, 180);
+	}
+
 
 	public static boolean isScreenNeedRotateForCamera(Activity activity, int sensorOrientation) {
 		boolean swappedDimensions = false;
@@ -79,9 +96,9 @@ public class CameraUtil {
 		// Pick the smallest of those big enough. If there is no one big enough, pick the
 		// largest of those not big enough.
 		if (bigEnough.size() > 0) {
-			return Collections.min(bigEnough, new CompareSizesByArea());
+			return Collections.min(bigEnough, new CompareSizesByLargerArea());
 		} else if (notBigEnough.size() > 0) {
-			return Collections.max(notBigEnough, new CompareSizesByArea());
+			return Collections.max(notBigEnough, new CompareSizesByLargerArea());
 		} else {
 			Log.e(TAG, "Couldn't find any suitable preview size");
 			return choices[0];
@@ -92,11 +109,72 @@ public class CameraUtil {
 	 * Copied from googlesamples/android-Camera2Basic
 	 * Compares two {@code Size}s based on their areas.
 	 **/
-	public static class CompareSizesByArea implements Comparator<Size> {
+	public static class CompareSizesByLargerArea implements Comparator<Size> {
 		@Override
 		public int compare(Size lhs, Size rhs) {
 			// We cast here to ensure the multiplications won't overflow
-			return Long.signum((long) lhs.getWidth() * lhs.getHeight() - (long) rhs.getWidth() * rhs.getHeight());
+			return Long.signum((long) rhs.getWidth() * rhs.getHeight() - (long) lhs.getWidth() * lhs.getHeight());
 		}
+	}
+
+	/**
+	 * Retrieves the JPEG orientation from the specified screen rotation.
+	 *
+	 * @param rotation The screen rotation.
+	 * @return The JPEG orientation (one of 0, 90, 270, and 360)
+	 */
+	public static int getOrientation(int rotation, int cameraSensorOrientation) {
+		// Sensor orientation is 90 for most devices, or 270 for some devices (eg. Nexus 5X)
+		// We have to take that into account and rotate JPEG properly.
+		// For devices with orientation of 90, we simply return our mapping from ORIENTATIONS.
+		// For devices with orientation of 270, we need to rotate the JPEG 180 degrees.
+		return (ORIENTATIONS.get(rotation) + cameraSensorOrientation + 270) % 360;
+	}
+
+	public static class ImageSaver implements Runnable {
+		/**
+		 * The JPEG image
+		 */
+		private final Image mImage;
+		/**
+		 * The file we save the image into.
+		 */
+		private final File mFile;
+
+		public ImageSaver(Image image, File file) {
+			mImage = image;
+			mFile = file;
+		}
+
+		@Override
+		public void run() {
+			ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
+			byte[] bytes = new byte[buffer.remaining()];
+			buffer.get(bytes);
+			FileOutputStream output = null;
+			try {
+				output = new FileOutputStream(mFile);
+				output.write(bytes);
+			} catch (IOException e) {
+				e.printStackTrace();
+			} finally {
+				mImage.close();
+				if (null != output) {
+					try {
+						output.close();
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
+			}
+		}
+	}
+
+	public static void addImageToGallery(Context context, File image) {
+		Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+		File f = new File(image.getAbsolutePath());
+		Uri contentUri = Uri.fromFile(f);
+		mediaScanIntent.setData(contentUri);
+		context.sendBroadcast(mediaScanIntent);
 	}
 }
