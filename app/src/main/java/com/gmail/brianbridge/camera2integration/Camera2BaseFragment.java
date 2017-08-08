@@ -21,7 +21,6 @@ import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.ImageReader;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -40,7 +39,6 @@ import android.widget.Button;
 import android.widget.Toast;
 
 import java.io.File;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -109,10 +107,27 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 		}
 	};
 
-	private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
+	private final ImageReader.OnImageAvailableListener mOnCaptureAvailableListener = new ImageReader.OnImageAvailableListener() {
 		@Override
 		public void onImageAvailable(ImageReader reader) {
 			mBackgroundHandler.post(new CameraUtil.ImageSaver(reader.acquireNextImage(), mFile));
+		}
+	};
+
+	private final ImageReader.OnImageAvailableListener mOnSnapAvailableListener = new ImageReader.OnImageAvailableListener() {
+		@Override
+		public void onImageAvailable(ImageReader reader) {
+			reader.acquireNextImage().close();
+			if (!capturing) {
+				capturing = true;
+				takePicture();
+				mBackgroundHandler.postDelayed(new Runnable() {
+					@Override
+					public void run() {
+						capturing = false;
+					}
+				}, 5000);
+			}
 		}
 	};
 
@@ -190,10 +205,15 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	private CameraCaptureSession mCaptureSession;
 	private CameraDevice mCameraDevice; // Current opened camera
 	private ImageReader mImageReader;
+	private ImageReader mSnapImageReader;
 	private CaptureRequest.Builder mPreviewRequestBuilder;
 	private CaptureRequest mPreviewRequest;
 	private HandlerThread mBackgroundThread;
 	private Handler mBackgroundHandler;
+	private HandlerThread mSnapThread;
+	private Handler mSnapHandler;
+	private HandlerThread mCaptureThread;
+	private Handler mCaptureHandler;
 
 	// Camera & Preview Data
 	private String mCameraId; // ID of the current CameraDevice
@@ -205,6 +225,8 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	// Others
 	private Semaphore mCameraOpenCloseLock = new Semaphore(1); // to prevent the app from exiting before closing the camera.
 	private File mFile; // output
+	private boolean capturing = false;
+
 
 	// Config Params
 	private List<Integer> mDeniedLens;
@@ -236,11 +258,11 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	public void onResume() {
 		super.onResume();
 		startBackgroundThread();
-		if (mTextureView.isAvailable()) {
-			openCamera(mTextureView.getWidth(), mTextureView.getHeight());
-		} else {
+//		if (mTextureView.isAvailable()) {
+//			openCamera(mTextureView.getWidth(), mTextureView.getHeight());
+//		} else {
 			mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
-		}
+//		}
 	}
 
 	@Override
@@ -274,14 +296,32 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 		mBackgroundThread = new HandlerThread("CameraBackground");
 		mBackgroundThread.start();
 		mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
+
+		mSnapThread = new HandlerThread("SnapBackground");
+		mSnapThread.start();
+		mSnapHandler = new Handler(mSnapThread.getLooper());
+
+		mCaptureThread = new HandlerThread("CaptureBackground");
+		mCaptureThread.start();
+		mCaptureHandler = new Handler(mCaptureThread.getLooper());
 	}
 
 	private void stopBackgroundThread() {
 		mBackgroundThread.quitSafely();
+		mSnapThread.quitSafely();
+		mCaptureThread.quitSafely();
 		try {
 			mBackgroundThread.join(); // join to main thread, wait for background thread die
 			mBackgroundThread = null;
 			mBackgroundHandler = null;
+
+			mSnapThread.join(); // join to main thread, wait for background thread die
+			mSnapThread = null;
+			mSnapHandler = null;
+
+			mCaptureThread.join(); // join to main thread, wait for background thread die
+			mCaptureThread = null;
+			mCaptureHandler = null;
 		} catch (InterruptedException e) {
 			Log.e(TAG, e.toString());
 		}
@@ -358,9 +398,31 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 				}
 
 				// Get the largest output resolution of camera
-				List<Size> outputSizes = Arrays.asList(map.getOutputSizes(ImageFormat.JPEG));
-				Collections.sort(outputSizes, new CameraUtil.CompareSizesByLargerArea());
+				List<Size> outputSizes = Arrays.asList(map.getOutputSizes(ImageFormat.YUV_420_888));
 				Size largest = null;
+				for (Size size: outputSizes) {
+					if ((float) size.getHeight() / size.getWidth() == displayRatio) {
+						largest = size;
+						break;
+					}
+				}
+				if (largest == null) {
+					largest = Collections.max(
+							Arrays.asList(map.getOutputSizes(ImageFormat.YUV_420_888)),
+							new CameraUtil.CompareSizesByLargerArea());
+				}
+
+				mSnapImageReader = ImageReader.newInstance(
+						largest.getWidth() / 4,
+						largest.getHeight() / 4,
+						ImageFormat.YUV_420_888,
+						/*maxImages*/2);
+				mSnapImageReader.setOnImageAvailableListener(mOnSnapAvailableListener, mSnapHandler);
+
+				// Get the largest output resolution of camera
+				outputSizes = Arrays.asList(map.getOutputSizes(ImageFormat.JPEG));
+				Collections.sort(outputSizes, new CameraUtil.CompareSizesByLargerArea());
+				largest = null;
 				for (Size size: outputSizes) {
 					if ((float) size.getHeight() / size.getWidth() == displayRatio) {
 						largest = size;
@@ -377,8 +439,8 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 						largest.getWidth(),
 						largest.getHeight(),
 						ImageFormat.JPEG,
-						/*maxImages*/2);
-				mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mBackgroundHandler);
+						/*maxImages*/1);
+				mImageReader.setOnImageAvailableListener(mOnCaptureAvailableListener, mCaptureHandler);
 
 				mCameraSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
 
@@ -443,9 +505,10 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 			// We set up a CaptureRequest.Builder with the output Surface.
 			mPreviewRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
 			mPreviewRequestBuilder.addTarget(surface);
+			mPreviewRequestBuilder.addTarget(mSnapImageReader.getSurface());
 
 			// Here, we create a CameraCaptureSession for camera preview.
-			mCameraDevice.createCaptureSession(Arrays.asList(surface, mImageReader.getSurface()),
+			mCameraDevice.createCaptureSession(Arrays.asList(surface, mSnapImageReader.getSurface(), mImageReader.getSurface()),
 					new CameraCaptureSession.StateCallback() {
 
 						@Override
@@ -529,15 +592,12 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	private void unlockFocus() {
 		try {
 			// Reset the auto-focus trigger
-			mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER,
-					CameraMetadata.CONTROL_AF_TRIGGER_CANCEL);
+			mPreviewRequestBuilder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_CANCEL);
 //			setAutoFlash(mPreviewRequestBuilder);
-			mCaptureSession.capture(mPreviewRequestBuilder.build(), mCaptureCallback,
-					mBackgroundHandler);
+			mCaptureSession.capture(mPreviewRequestBuilder.build(), mCaptureCallback, mBackgroundHandler);
 			// After this, the camera will go back to the normal state of preview.
 			mState = STATE_PREVIEW;
-			mCaptureSession.setRepeatingRequest(mPreviewRequest, mCaptureCallback,
-					mBackgroundHandler);
+			mCaptureSession.setRepeatingRequest(mPreviewRequest, mCaptureCallback, mBackgroundHandler);
 		} catch (CameraAccessException e) {
 			e.printStackTrace();
 		}
