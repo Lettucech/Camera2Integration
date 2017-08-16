@@ -18,12 +18,15 @@ package com.gmail.brianbridge.camera2integration;
 
 import android.content.Context;
 import android.util.AttributeSet;
+import android.util.Log;
+import android.util.Size;
 import android.view.TextureView;
 
 /**
  * A {@link TextureView} that can be adjusted to a specified aspect ratio.
  */
 public class AutoFitTextureView extends TextureView {
+	public static final String TAG = AutoFitTextureView.class.getSimpleName();
 
 	private int mRatioWidth = 0;
 	private int mRatioHeight = 0;
@@ -60,15 +63,35 @@ public class AutoFitTextureView extends TextureView {
 	@Override
 	protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
 		super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+
 		int width = MeasureSpec.getSize(widthMeasureSpec);
 		int height = MeasureSpec.getSize(heightMeasureSpec);
+
 		if (0 == mRatioWidth || 0 == mRatioHeight) {
 			setMeasuredDimension(width, height);
 		} else {
-			if (width < height * mRatioWidth / mRatioHeight) {
-				setMeasuredDimension(width, width * mRatioHeight / mRatioWidth);
+			float sourceRatio = (float) mRatioWidth / mRatioHeight;
+			float targetRatio = (float) width / height;
+			boolean baseOnLargerDiff = sourceRatio < targetRatio;
+
+			Log.d(TAG, "sourceRatio: " + sourceRatio);
+			Log.d(TAG, "targetRatio: " + targetRatio);
+			Log.d(TAG, "baseOnLargerDiff: " + baseOnLargerDiff);
+
+			int widthDiff = mRatioWidth - width;
+			int heightDiff = mRatioHeight - height;
+			Log.d(TAG, "diff: w = " + widthDiff + ", h = " + heightDiff);
+
+			if (baseOnLargerDiff && widthDiff > heightDiff || !baseOnLargerDiff && widthDiff < heightDiff) {
+				Log.d(TAG, "width based: " + width + "x" + (int) Math.ceil((float) width / mRatioWidth * mRatioHeight));
+				setMeasuredDimension(
+						width,
+						(int) Math.ceil((float) width / mRatioWidth * mRatioHeight));
 			} else {
-				setMeasuredDimension(height * mRatioWidth / mRatioHeight, height);
+				Log.d(TAG, "height based: " + (int) Math.ceil((float) height / mRatioHeight * mRatioWidth) + "x" + height);
+				setMeasuredDimension(
+						(int) Math.ceil((float) height / mRatioHeight * mRatioWidth),
+						height);
 			}
 		}
 	}

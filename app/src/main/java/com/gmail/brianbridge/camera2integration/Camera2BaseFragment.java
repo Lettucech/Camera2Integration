@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Point;
@@ -20,7 +22,9 @@ import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.Image;
 import android.media.ImageReader;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -36,9 +40,14 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -110,24 +119,45 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	private final ImageReader.OnImageAvailableListener mOnCaptureAvailableListener = new ImageReader.OnImageAvailableListener() {
 		@Override
 		public void onImageAvailable(ImageReader reader) {
-			mBackgroundHandler.post(new CameraUtil.ImageSaver(reader.acquireNextImage(), mFile));
-		}
-	};
+			Image image = reader.acquireNextImage();
+			Image.Plane[] planes = image.getPlanes();
+			ByteBuffer buffer = planes[0].getBuffer();
+			buffer.rewind();
+			byte[] data = new byte[buffer.capacity()];
+			buffer.get(data);
+			Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+			image.close();
 
-	private final ImageReader.OnImageAvailableListener mOnSnapAvailableListener = new ImageReader.OnImageAvailableListener() {
-		@Override
-		public void onImageAvailable(ImageReader reader) {
-			reader.acquireNextImage().close();
-			if (!capturing) {
-				capturing = true;
-				takePicture();
-				mBackgroundHandler.postDelayed(new Runnable() {
+			Matrix matrix = new Matrix();
+			matrix.postRotate(90);
+			Bitmap rotatedBitmap = Bitmap.createBitmap(bitmap , 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+			bitmap.recycle();
+
+			FileOutputStream stream = null;
+			try {
+				stream = new FileOutputStream(mFile);
+				rotatedBitmap.compress(Bitmap.CompressFormat.PNG, 100, stream); // bmp is your Bitmap instance
+
+				getActivity().runOnUiThread(new Runnable() {
 					@Override
 					public void run() {
-						capturing = false;
+						mPreviewImageView.setImageURI(Uri.fromFile(mFile));
+						mPreviewImageView.setVisibility(View.VISIBLE);
 					}
-				}, 5000);
+				});
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+			} finally {
+				if (stream != null) {
+					try {
+						stream.close();
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
 			}
+
+//			mBackgroundHandler.post(new CameraUtil.ImageByteSaver(, mFile));
 		}
 	};
 
@@ -135,12 +165,10 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 		private void process(CaptureResult result) {
 			switch (mState) {
 				case STATE_PREVIEW: {
-					Log.d(TAG, "STATE_PREVIEW");
 					// We have nothing to do when the camera preview is working normally.
 					break;
 				}
 				case STATE_WAITING_LOCK:
-					Log.d(TAG, "STATE_WAITING_LOCK");
 					Integer afState = result.get(CaptureResult.CONTROL_AF_STATE);
 					if (afState == null) {
 						captureStillPicture();
@@ -158,7 +186,6 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 					}
 					break;
 				case STATE_WAITING_PRECAPTURE: {
-					Log.d(TAG, "STATE_WAITING_PRECAPTURE");
 					// CONTROL_AE_STATE can be null on some devices
 					Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
 					if (aeState == null ||
@@ -169,7 +196,6 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 					break;
 				}
 				case STATE_WAITING_NON_PRECAPTURE: {
-					Log.d(TAG, "STATE_WAITING_NON_PRECAPTURE");
 					// CONTROL_AE_STATE can be null on some devices
 					Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
 					if (aeState == null || aeState != CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
@@ -200,6 +226,7 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	// Views
 	private AutoFitTextureView mTextureView;
 	private Button mCaptureButton;
+	private ImageView mPreviewImageView;
 
 	// Camera & Preview Controls
 	private CameraCaptureSession mCaptureSession;
@@ -244,8 +271,10 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
 		mTextureView = (AutoFitTextureView) view.findViewById(R.id.textureView);
 		mCaptureButton = (Button) view.findViewById(R.id.btn_capture);
+		mPreviewImageView = (ImageView) view.findViewById(R.id.imageView_preview);
 
 		mCaptureButton.setOnClickListener(this);
+		mPreviewImageView.setOnClickListener(this);
 	}
 
 	@Override
@@ -255,21 +284,21 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	}
 
 	@Override
-	public void onResume() {
-		super.onResume();
+	public void onStart() {
+		super.onStart();
 		startBackgroundThread();
-//		if (mTextureView.isAvailable()) {
-//			openCamera(mTextureView.getWidth(), mTextureView.getHeight());
-//		} else {
+		if (mTextureView.isAvailable()) {
+			openCamera(mTextureView.getWidth(), mTextureView.getHeight());
+		} else {
 			mTextureView.setSurfaceTextureListener(mSurfaceTextureListener);
-//		}
+		}
 	}
 
 	@Override
-	public void onPause() {
+	public void onStop() {
 		closeCamera();
 		stopBackgroundThread();
-		super.onPause();
+		super.onStop();
 	}
 
 	private void requestCameraPermission() {
@@ -398,41 +427,21 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 				}
 
 				// Get the largest output resolution of camera
-				List<Size> outputSizes = Arrays.asList(map.getOutputSizes(ImageFormat.YUV_420_888));
+				List<Size> outputSizes = Arrays.asList(map.getOutputSizes(ImageFormat.JPEG));
 				Size largest = null;
 				for (Size size: outputSizes) {
-					if ((float) size.getHeight() / size.getWidth() == displayRatio) {
+					Log.d(TAG, size.toString());
+					if ((float) size.getWidth() / size.getHeight() == (float) 16 / 9) {
+						if (size.getWidth() * size.getHeight() < 500000) {
+							break;
+						}
 						largest = size;
-						break;
-					}
-				}
-				if (largest == null) {
-					largest = Collections.max(
-							Arrays.asList(map.getOutputSizes(ImageFormat.YUV_420_888)),
-							new CameraUtil.CompareSizesByLargerArea());
-				}
-
-				mSnapImageReader = ImageReader.newInstance(
-						largest.getWidth() / 4,
-						largest.getHeight() / 4,
-						ImageFormat.YUV_420_888,
-						/*maxImages*/2);
-				mSnapImageReader.setOnImageAvailableListener(mOnSnapAvailableListener, mSnapHandler);
-
-				// Get the largest output resolution of camera
-				outputSizes = Arrays.asList(map.getOutputSizes(ImageFormat.JPEG));
-				Collections.sort(outputSizes, new CameraUtil.CompareSizesByLargerArea());
-				largest = null;
-				for (Size size: outputSizes) {
-					if ((float) size.getHeight() / size.getWidth() == displayRatio) {
-						largest = size;
-						break;
 					}
 				}
 				if (largest == null) {
 					largest = Collections.max(
 							Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
-							new CameraUtil.CompareSizesByLargerArea());
+							new CameraUtil.CompareSizesByArea());
 				}
 
 				mImageReader = ImageReader.newInstance(
@@ -471,13 +480,15 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 						maxPreviewWidth,
 						maxPreviewHeight,
 						largest);
+				Log.d(TAG, "largest Size " + largest.toString());
+				Log.d(TAG, "Preview Size " + mPreviewSize.toString());
 
 				// We fit the aspect ratio of TextureView to the size of preview we picked.
 				int orientation = getResources().getConfiguration().orientation;
 				if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-					mTextureView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+					mTextureView.setAspectRatio(largest.getWidth(), largest.getHeight());
 				} else {
-					mTextureView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
+					mTextureView.setAspectRatio(largest.getHeight(), largest.getWidth());
 				}
 
 				Boolean available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
@@ -505,10 +516,9 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 			// We set up a CaptureRequest.Builder with the output Surface.
 			mPreviewRequestBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
 			mPreviewRequestBuilder.addTarget(surface);
-			mPreviewRequestBuilder.addTarget(mSnapImageReader.getSurface());
 
 			// Here, we create a CameraCaptureSession for camera preview.
-			mCameraDevice.createCaptureSession(Arrays.asList(surface, mSnapImageReader.getSurface(), mImageReader.getSurface()),
+			mCameraDevice.createCaptureSession(Arrays.asList(surface, mImageReader.getSurface()),
 					new CameraCaptureSession.StateCallback() {
 
 						@Override
@@ -660,7 +670,13 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 	public void onClick(View v) {
 		switch (v.getId()) {
 			case R.id.btn_capture:
+				Log.d(TAG, "Texture " + mTextureView.getWidth() + "x" + mTextureView.getHeight());
+				mPreviewImageView.setImageDrawable(null);
+				mPreviewImageView.setVisibility(View.GONE);
 				takePicture();
+				break;
+			case R.id.imageView_preview:
+				mPreviewImageView.setVisibility(View.GONE);
 				break;
 			default:
 				Log.e(TAG, "no handler");

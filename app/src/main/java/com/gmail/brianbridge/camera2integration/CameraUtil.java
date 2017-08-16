@@ -96,9 +96,9 @@ public class CameraUtil {
 		// Pick the smallest of those big enough. If there is no one big enough, pick the
 		// largest of those not big enough.
 		if (bigEnough.size() > 0) {
-			return Collections.min(bigEnough, new CompareSizesByLargerArea());
+			return Collections.min(bigEnough, new CompareSizesByArea());
 		} else if (notBigEnough.size() > 0) {
-			return Collections.max(notBigEnough, new CompareSizesByLargerArea());
+			return Collections.max(notBigEnough, new CompareSizesByArea());
 		} else {
 			Log.e(TAG, "Couldn't find any suitable preview size");
 			return choices[0];
@@ -109,11 +109,11 @@ public class CameraUtil {
 	 * Copied from googlesamples/android-Camera2Basic
 	 * Compares two {@code Size}s based on their areas.
 	 **/
-	public static class CompareSizesByLargerArea implements Comparator<Size> {
+	public static class CompareSizesByArea implements Comparator<Size> {
 		@Override
 		public int compare(Size lhs, Size rhs) {
 			// We cast here to ensure the multiplications won't overflow
-			return Long.signum((long) rhs.getWidth() * rhs.getHeight() - (long) lhs.getWidth() * lhs.getHeight());
+			return Long.signum((long) lhs.getWidth() * lhs.getHeight() - (long) rhs.getWidth() * rhs.getHeight());
 		}
 	}
 
@@ -159,6 +159,41 @@ public class CameraUtil {
 				e.printStackTrace();
 			} finally {
 				mImage.close();
+				if (null != output) {
+					try {
+						output.close();
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+				}
+			}
+		}
+	}
+
+	public static class ImageByteSaver implements Runnable {
+		/**
+		 * The JPEG image
+		 */
+		private final byte[] mBytes;
+		/**
+		 * The file we save the image into.
+		 */
+		private final File mFile;
+
+		public ImageByteSaver(byte[] bytes, File file) {
+			mBytes = bytes;
+			mFile = file;
+		}
+
+		@Override
+		public void run() {
+			FileOutputStream output = null;
+			try {
+				output = new FileOutputStream(mFile);
+				output.write(mBytes);
+			} catch (IOException e) {
+				e.printStackTrace();
+			} finally {
 				if (null != output) {
 					try {
 						output.close();
