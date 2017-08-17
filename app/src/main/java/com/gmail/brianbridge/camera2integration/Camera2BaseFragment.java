@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Point;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -431,8 +432,8 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 				Size largest = null;
 				for (Size size: outputSizes) {
 					Log.d(TAG, size.toString());
-					if ((float) size.getWidth() / size.getHeight() == (float) 16 / 9) {
-						if (size.getWidth() * size.getHeight() < 500000) {
+					if ((float) size.getWidth() / size.getHeight() == (float) 4 / 3) {
+						if (size.getWidth() * size.getHeight() < 1000000) {
 							break;
 						}
 						largest = size;
@@ -450,6 +451,7 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 						ImageFormat.JPEG,
 						/*maxImages*/1);
 				mImageReader.setOnImageAvailableListener(mOnCaptureAvailableListener, mCaptureHandler);
+
 
 				mCameraSensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
 
@@ -483,12 +485,21 @@ public class Camera2BaseFragment extends Fragment implements View.OnClickListene
 				Log.d(TAG, "largest Size " + largest.toString());
 				Log.d(TAG, "Preview Size " + mPreviewSize.toString());
 
+//				// We fit the aspect ratio of TextureView to the size of preview we picked.
+//				int orientation = getResources().getConfiguration().orientation;
+//				if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+//					mTextureView.setAspectRatio(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+//				} else {
+//					mTextureView.setAspectRatio(mPreviewSize.getHeight(), mPreviewSize.getWidth());
+//				}
 				// We fit the aspect ratio of TextureView to the size of preview we picked.
 				int orientation = getResources().getConfiguration().orientation;
 				if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-					mTextureView.setAspectRatio(largest.getWidth(), largest.getHeight());
+					mTextureView.setAspectRatio(
+							mPreviewSize.getWidth(), mPreviewSize.getHeight(), mTextureView.getWidth(), mTextureView.getHeight(), largest);
 				} else {
-					mTextureView.setAspectRatio(largest.getHeight(), largest.getWidth());
+					mTextureView.setAspectRatio(
+							mPreviewSize.getHeight(), mPreviewSize.getWidth(), mTextureView.getWidth(), mTextureView.getHeight(), largest);
 				}
 
 				Boolean available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
